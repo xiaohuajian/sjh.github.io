@@ -1,0 +1,260 @@
+package com.mm.android.mobilecommon.utils;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.database.Cursor;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.provider.MediaStore;
+import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
+import android.support.v4.content.FileProvider;
+import android.util.Log;
+import android.widget.ImageView;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+
+/**
+ * Created by 41082 on 2018/4/26.
+ */
+
+public class HeadPhotoUtils {
+
+    private static final String TAG = "HeadPhotoUtils";
+    // 获取头像图片的途径
+    public static final int OPEN_CAMERA = 0x01;
+    public static final int FROM_GALLERY =0x02;
+    public static final int AFTER_CROP_FILE = 0x03;
+
+    //onActivity的常量定义
+    public static final int RESULTCODE_OPENCAMERA = 1001;
+    public static final int RESULTCODE_GALLERY = 1002;
+    public static final int RESULTCODE_CROP_PICTURE_RESULT = 1003;
+
+    private static HeadPhotoUtils mHeadPhotoUtils;
+    private Activity mActivity;
+
+    private File mFileOpenCamera;
+    private String mFileOpenCameraPath;
+
+    private File mFileGallery;
+    private String mFileGalleryPath;
+
+    private File mFileAfterCrop;
+    private String mFileAfterCropPath;
+
+    private Uri mTakePhotoAfterCropUri;
+
+
+
+    // 裁剪形状是否用圆形 默认为圆形--或者长方形
+    private boolean isCropShapeCircle = true;
+
+    private HeadPhotoUtils() {
+
+    }
+
+    public static HeadPhotoUtils newInstance(){
+        synchronized (HeadPhotoUtils.class){
+            if (mHeadPhotoUtils == null){
+                mHeadPhotoUtils = new HeadPhotoUtils();
+            }
+        }
+        return mHeadPhotoUtils;
+    }
+
+    public void setActivity(Activity mActivity){
+        this.mActivity = mActivity;
+    }
+
+    /**
+     * 相机获取图片
+     */
+    public  void openCamera() {
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        takePictureIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        takePictureIntent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+        File photoFile = createImageFile(mFileOpenCamera, OPEN_CAMERA);
+        mFileOpenCamera = photoFile;
+        File storageDir = mActivity.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        LogUtil.debugLog(TAG, "showCamera: " + "storageDir path" + storageDir.getPath());
+        // Continue only if the File was successfully created
+        if (photoFile != null) {
+            if (Build.VERSION.SDK_INT < 24){
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, Uri.fromFile(mFileOpenCamera));
+            }else {
+                Uri photoURI = FileProvider.getUriForFile(mActivity, mActivity.getPackageName() +".fileprovider", photoFile);
+                takePictureIntent.putExtra(MediaStore.EXTRA_OUTPUT, photoURI);
+            }
+            mActivity.startActivityForResult(takePictureIntent, RESULTCODE_OPENCAMERA);
+        }
+    }
+
+    /**
+     * 从相册中获取图片
+     */
+    public void getPhotoFromGallery(){
+        Intent photoGalleryIntent = new Intent(Intent.ACTION_PICK);
+        photoGalleryIntent.setDataAndType(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, "image/*");
+        mActivity.startActivityForResult(photoGalleryIntent, RESULTCODE_GALLERY);
+    }
+
+    /**
+     * 裁剪图片
+     * @param cropUri
+     */
+    public void cropPhoto(@Nullable Uri cropUri, @Nullable String path, int pictureFromWay){
+        mFileAfterCrop = createImageFile(mFileAfterCrop, AFTER_CROP_FILE);
+        try {
+            if(mFileAfterCrop.exists()){
+                mFileAfterCrop.delete();
+            }
+            mFileAfterCrop.createNewFile();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        mTakePhotoAfterCropUri = Uri.fromFile(mFileAfterCrop);
+        Intent intent = new Intent("com.android.camera.action.CROP");
+
+        // 区分图片来源 二者采用不同的获取图片数据流的方式
+        if (pictureFromWay == OPEN_CAMERA){
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+                Uri uri = FileProvider.getUriForFile(mActivity,mActivity.getPackageName() + ".fileprovider", new File(path));
+                intent.setDataAndType(uri, "image/*");
+            } else {
+                intent.setDataAndType(Uri.fromFile(new File(path)), "image/*");
+            }
+        }else if (pictureFromWay == FROM_GALLERY){
+            intent.setDataAndType(cropUri, "image/*");
+        }
+
+        if (isCropShapeCircle()){
+            // aspectX aspectY 是宽高的比例
+            intent.putExtra("aspectX", 1);
+            intent.putExtra("aspectY", 1);
+
+            // outputX outputY 是裁剪图片宽高
+            intent.putExtra("outputX", 200);
+            intent.putExtra("outputY", 200);
+        }else {
+            intent.putExtra("aspectX", 16);
+            intent.putExtra("aspectY", 9);
+            // outputX outputY 是裁剪图片宽高
+            intent.putExtra("outputX", 480);
+            intent.putExtra("outputY", 270);
+        }
+        intent.putExtra("crop", "true");
+        intent.putExtra("return-data", false);
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, mTakePhotoAfterCropUri);
+        intent.putExtra("outputFormat", Bitmap.CompressFormat.JPEG.toString());// 图片格式
+        mActivity.startActivityForResult(intent, RESULTCODE_CROP_PICTURE_RESULT);
+    }
+
+
+    private File createImageFile(File file, int type) {
+        // Create an image file name
+        String timeStamp = new SimpleDateFormat("yyyyMMdd_HHmmss").format(new Date());
+        String imageFileName = "head_picture_" + timeStamp ;
+        File storageDir = mActivity.getExternalFilesDir(Environment.DIRECTORY_PICTURES);
+        try {
+            file = File.createTempFile(
+                    imageFileName,  /* prefix */
+                    ".jpg",         /* suffix */
+                    storageDir      /* directory */
+            );
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        // Save a file: path for use with ACTION_VIEW intents
+        switch (type){
+            case OPEN_CAMERA:
+                mFileOpenCameraPath  = file.getAbsolutePath();
+                break;
+            case FROM_GALLERY:
+                mFileGalleryPath  = file.getAbsolutePath();
+                break;
+            case AFTER_CROP_FILE:
+                mFileAfterCropPath  = file.getAbsolutePath();
+                break;
+        }
+
+        try {
+            LogUtil.debugLog(TAG, "createImageFile: file的路径：" + file.getAbsolutePath() +  " /n file 的size：" + new FileInputStream(file).available());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return file;
+    }
+
+    public boolean isCropShapeCircle() {
+        return isCropShapeCircle;
+    }
+
+    public void setCropShapeCircle(boolean cropShapeCircle) {
+        isCropShapeCircle = cropShapeCircle;
+    }
+
+    public String getmFileOpenCameraPath() {
+        return mFileOpenCameraPath;
+    }
+
+    public String getmFileGalleryPath() {
+        return mFileGalleryPath;
+    }
+
+    public String getmFileAfterCropPath() {
+        return mFileAfterCropPath;
+    }
+
+    public Uri getmTakePhotoAfterCropUri() {
+        return mTakePhotoAfterCropUri;
+    }
+
+
+    public byte[] simpleCompressBitmap(ImageView imageView, String filePath) {
+        // Get the dimensions of the View
+        int targetW = imageView.getWidth();
+        int targetH = imageView.getHeight();
+
+        // Get the dimensions of the bitmap
+        BitmapFactory.Options bmOptions = new BitmapFactory.Options();
+        bmOptions.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(filePath, bmOptions);
+        int photoW = bmOptions.outWidth;
+        int photoH = bmOptions.outHeight;
+
+        // Determine how much to scale down the image
+        int scaleFactor = Math.min(photoW / targetW, photoH / targetH);
+
+        // Decode the image file into a Bitmap sized to fill the View
+        bmOptions.inJustDecodeBounds = false;
+        bmOptions.inSampleSize = scaleFactor;
+        bmOptions.inPurgeable = true;
+
+        Bitmap bitmap = BitmapFactory.decodeFile(filePath, bmOptions);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, baos);// 质量压缩方法，这里100表示不压缩，把压缩后的数据存放到baos中
+        int options = 100;
+        while (baos.toByteArray().length / 1024 > 200) { // 循环判断如果压缩后图片是否大于100kb,大于继续压缩
+            baos.reset();// 重置baos即清空baos
+            bitmap.compress(Bitmap.CompressFormat.JPEG, options, baos);// 这里压缩options%，把压缩后的数据存放到baos中
+            options -= 10;// 每次都减少10
+        }
+        byte[] bytes = baos.toByteArray();
+        return  bytes;
+    }
+
+}
